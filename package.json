@@ -1,0 +1,22 @@
+{
+  "name": "cloud9-backend",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "dependencies": {
+    "@fal-ai/client": "^1.10.1",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "formdata-node": "^6.0.3",
+    "groq-sdk": "^1.2.1",
+    "node-fetch": "^3.3.2",
+    "openai": "^6.42.0",
+    "replicate": "^1.4.0",
+    "uuid": "^14.0.0"
+  }
+}
