@@ -1,129 +1,122 @@
 import express from "express";
 import cors from "cors";
-import fetch from "node-fetch";
 import dotenv from "dotenv";
 dotenv.config();
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: "10mb" }));
+app.use(express.json());
 
-const GROQ_API_KEY = process.env.GROQ_API_KEY;
-const CF_API_TOKEN = process.env.CF_API_TOKEN;
-const CF_ACCOUNT_ID = process.env.CF_ACCOUNT_ID;
+const PORT = process.env.PORT || 3001;
 
-// Health check
 app.get("/", (req, res) => {
-  res.json({ status: "Cloud9 backend running 🚀" });
+  res.json({ status: "Stoic API Running 🚀" });
 });
 
-// ---------- AI Text (Groq) ----------
 app.post("/ask", async (req, res) => {
-  const { query } = req.body;
-  if (!query) return res.status(400).json({ error: "Query is required" });
-
-  console.log("Received query:", query);
-
   try {
-    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    const { query, model = "groq" } = req.body;
+
+    if (!query) {
+      return res.status(400).json({ error: "Query is required" });
+    }
+
+    // Tavily Search
+    const tavilyRes = await fetch("https://api.tavily.com/search", {
       method: "POST",
-      headers: {
-        "Authorization": `Bearer ${GROQ_API_KEY}`,
-        "Content-Type": "application/json"
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "llama-3.3-70b-versatile",
-        messages: [
-          { role: "system", content: "You are Cloud9 AI, a helpful research assistant. Answer questions in detail with markdown formatting." },
-          { role: "user", content: query }
-        ]
-      })
+        api_key: process.env.TAVILY_API_KEY,
+        query: query,
+        max_results: 5,
+        include_answer: false,
+      }),
     });
 
-    const data = await response.json();
-    if (data.error) throw new Error(data.error.message);
-    const answer = data.choices[0].message.content;
-    res.json({ answer });
-  } catch (err) {
-    console.error("Groq error:", err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
+    const tavilyData = await tavilyRes.json();
+    const results = tavilyData.results || [];
 
-// ---------- Image Generation (Cloudflare Flux) ----------
-app.post("/generate-image", async (req, res) => {
-  const { prompt } = req.body;
-  if (!prompt) return res.status(400).json({ error: "Prompt is required" });
+    const context = results
+      .map((r, i) => `Source ${i + 1}: ${r.title}\n${r.content}\nURL: ${r.url}`)
+      .join("\n\n");
 
-  try {
-    const response = await fetch(
-      `https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/run/@cf/black-forest-labs/flux-1-schnell`,
-      {
+    const systemPrompt = "You are a search assistant. NEVER use bold, asterisks, or markdown. NEVER use headers or bullet points. Write ONLY in plain text paragraphs. Cite sources as (Source 1), (Source 2) within sentences. Keep answers to 3-4 short paragraphs max. Start and end directly.";
+    const userPrompt = `Question: ${query}\n\nWeb Search Results:\n${context}\n\nAnswer in plain text paragraphs only. No formatting. Max 4 paragraphs.`;
+
+    let answer = "";
+
+    if (model === "gemini") {
+      const res2 = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: systemPrompt + "\n\n" + userPrompt }] }],
+          generationConfig: { maxOutputTokens: 400, temperature: 0.3 }
+        }),
+      });
+      const data = await res2.json();
+      answer = data.candidates?.[0]?.content?.parts?.[0]?.text || "No answer generated.";
+
+    } else if (model === "deepseek") {
+      const res2 = await fetch("https://api.deepseek.com/chat/completions", {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${CF_API_TOKEN}`,
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${process.env.DEEPSEEK_API_KEY}`,
         },
-        body: JSON.stringify({ prompt, num_steps: 4 })
-      }
-    );
+        body: JSON.stringify({
+          model: "deepseek-chat",
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt },
+          ],
+          max_tokens: 400,
+          temperature: 0.3,
+        }),
+      });
+      const data = await res2.json();
+      answer = data.choices?.[0]?.message?.content || "No answer generated.";
 
-    const contentType = response.headers.get("content-type");
-    if (contentType && contentType.includes("application/json")) {
-      const jsonData = await response.json();
-      if (jsonData.result && jsonData.result.image) {
-        return res.json({ imageUrl: `data:image/png;base64,${jsonData.result.image}` });
-      }
-      return res.status(500).json({ error: JSON.stringify(jsonData) });
-    }
-
-    const arrayBuffer = await response.arrayBuffer();
-    const base64 = Buffer.from(arrayBuffer).toString("base64");
-    res.json({ imageUrl: `data:image/png;base64,${base64}` });
-  } catch (err) {
-    console.error("Image generation error:", err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ---------- Avatar Creation (same Cloudflare model, different prompt) ----------
-app.post("/create-avatar", async (req, res) => {
-  const { style } = req.body;
-  if (!style) return res.status(400).json({ error: "Style is required" });
-
-  const prompt = `A portrait of a person transformed into ${style}, highly detailed, professional art, vibrant colors`;
-
-  try {
-    const response = await fetch(
-      `https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/run/@cf/black-forest-labs/flux-1-schnell`,
-      {
+    } else {
+      // Default: Groq
+      const res2 = await fetch("https://api.groq.com/openai/v1/chat/completions", {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${CF_API_TOKEN}`,
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
         },
-        body: JSON.stringify({ prompt, num_steps: 4 })
-      }
-    );
-
-    const contentType = response.headers.get("content-type");
-    if (contentType && contentType.includes("application/json")) {
-      const jsonData = await response.json();
-      if (jsonData.result && jsonData.result.image) {
-        return res.json({ imageUrl: `data:image/png;base64,${jsonData.result.image}` });
-      }
-      return res.status(500).json({ error: JSON.stringify(jsonData) });
+        body: JSON.stringify({
+          model: "llama-3.3-70b-versatile",
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt },
+          ],
+          max_tokens: 400,
+          temperature: 0.3,
+        }),
+      });
+      const data = await res2.json();
+      answer = data.choices?.[0]?.message?.content || "No answer generated.";
     }
 
-    const arrayBuffer = await response.arrayBuffer();
-    const base64 = Buffer.from(arrayBuffer).toString("base64");
-    res.json({ imageUrl: `data:image/png;base64,${base64}` });
-  } catch (err) {
-    console.error("Avatar error:", err.message);
-    res.status(500).json({ error: err.message });
+    answer = answer.replace(/\*\*/g, '').replace(/\*/g, '').replace(/#/g, '').trim();
+
+    const sources = results.map((r) => ({ title: r.title, url: r.url }));
+
+    const relatedQuestions = [
+      `How does ${query} work?`,
+      `What are the latest developments in ${query}?`,
+      `Why is ${query} important?`,
+    ];
+
+    res.json({ answer, sources, relatedQuestions, model });
+
+  } catch (error) {
+    console.error("Error:", error);
+    res.status(500).json({ error: "Internal server error: " + error.message });
   }
 });
 
-// ---------- Start Server ----------
-const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => console.log(`☁️ Cloud9 backend running at http://localhost:${PORT}`));
+app.listen(PORT, () => {
+  console.log(`🚀 Stoic backend running on port ${PORT}`);
+});
