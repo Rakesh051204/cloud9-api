@@ -3,6 +3,7 @@ import cors from 'cors';
 import fetch from 'node-fetch';
 import dotenv from 'dotenv';
 import { tavily } from '@tavily/core';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
 dotenv.config();
 const app = express();
@@ -48,6 +49,15 @@ app.post('/ask', async (req, res) => {
 
 // ---------- WEB SEARCH + AI (Tavily + Groq) ----------
 const tvly = tavily({ apiKey: process.env.TAVILY_API_KEY });
+
+// ---------- GEMINI (fallback when Groq fails) ----------
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+
+async function generateWithGemini(systemPrompt, userPrompt) {
+  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash-lite' });
+  const result = await model.generateContent(`${systemPrompt}\n\n${userPrompt}`);
+  return result.response.text();
+}
 
 app.post('/ask-with-web', async (req, res) => {
   const { query } = req.body;
@@ -98,7 +108,7 @@ app.post('/ask-with-web', async (req, res) => {
   }
 });
 
-// ---------- ENHANCED SEARCH WITH RICH STRUCTURED ANSWERS (using Groq) ----------
+// ---------- ENHANCED SEARCH WITH RICH STRUCTURED ANSWERS (Groq, with Gemini fallback) ----------
 app.post('/api/search', async (req, res) => {
   const { query } = req.body;
   if (!query) return res.status(400).json({ error: 'query required' });
@@ -120,19 +130,7 @@ app.post('/api/search', async (req, res) => {
       .map((r, i) => `Source [${i + 1}]: ${r.title}\nURL: ${r.url}\n${r.raw_content?.slice(0, 1500) || r.content}`)
       .join('\n\n');
 
-    // 2. Use Groq to generate a rich, structured answer
-    const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
-        messages: [
-          {
-            role: 'system',
-            content: `You are Stoic, a helpful AI assistant. Answer the user's question using ONLY the provided sources.
+    const systemPrompt = `You are Stoic, a helpful AI assistant. Answer the user's question using ONLY the provided sources.
 
 Format your answer with:
 
@@ -144,15 +142,39 @@ Format your answer with:
 
 💻 Code Example: (if relevant to the question, provide working code)
 
-Provide citations using [1], [2] etc. that refer to the sources listed below.`
-          },
-          { role: 'user', content: `Sources:\n${context}\n\nQuestion: ${query}` }
+Provide citations using [1], [2] etc. that refer to the sources listed below.`;
+
+    const userPrompt = `Sources:\n${context}\n\nQuestion: ${query}`;
+
+    // 2. Use Groq to generate a rich, structured answer
+    const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'llama-3.3-70b-versatile',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt }
         ]
       })
     });
 
     const data = await groqRes.json();
-    const answer = data.choices?.[0]?.message?.content || 'No answer generated.';
+    let answer = data.choices?.[0]?.message?.content;
+
+    // 2b. If Groq failed (rate limit, auth error, etc.), fall back to Gemini
+    if (!answer) {
+      console.log('Groq failed, falling back to Gemini...');
+      try {
+        answer = await generateWithGemini(systemPrompt, userPrompt);
+      } catch (geminiErr) {
+        console.error('Gemini fallback also failed:', geminiErr);
+        answer = 'No answer generated.';
+      }
+    }
 
     // 3. Generate some default follow-up suggestions
     const followUps = [

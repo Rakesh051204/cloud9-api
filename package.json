@@ -8,16 +8,31 @@
     "dev": "node --watch index.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.104.2",
     "@fal-ai/client": "^1.10.1",
+    "@google/generative-ai": "^0.24.1",
+    "@langchain/community": "^1.1.29",
+    "@langchain/core": "^1.1.49",
+    "@langchain/openai": "^1.4.7",
+    "@supabase/supabase-js": "^2.108.2",
     "@tavily/core": "^0.7.6",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "formdata-node": "^6.0.3",
+    "franc": "^6.2.0",
+    "googleapis": "^173.0.0",
     "groq-sdk": "^1.2.1",
+    "jsonwebtoken": "^9.0.3",
+    "langchain": "^1.4.5",
+    "mammoth": "^1.12.0",
+    "multer": "^2.2.0",
     "node-fetch": "^3.3.2",
     "openai": "^6.42.0",
+    "pdf-parse": "^2.4.5",
     "replicate": "^1.4.0",
+    "tesseract.js": "^7.0.0",
+    "textract": "^2.5.0",
     "uuid": "^14.0.0"
   }
 }
